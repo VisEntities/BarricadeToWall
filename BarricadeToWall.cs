@@ -11,7 +11,7 @@ using UnityEngine;
 namespace Oxide.Plugins
 {
     [Info("Barricade To Wall", "VisEntities", "1.0.0")]
-    [Description(" ")]
+    [Description("Turns barricades into high external walls automatically.")]
     public class BarricadeToWall : RustPlugin
     {
         #region Fields
@@ -121,14 +121,17 @@ namespace Oxide.Plugins
                 Vector3 position = entity.transform.position;
                 Quaternion rotation = entity.transform.rotation;
 
-                entity.Kill();
-
-                BaseEntity newEntity = GameManager.server.CreateEntity(newWallPrefab, position, rotation);
-                if (newEntity != null)
+                NextTick(() =>
                 {
-                    newEntity.Spawn();
-                    newEntity.OwnerID = player.userID;
-                }
+                    entity.Kill();
+
+                    BaseEntity newEntity = GameManager.server.CreateEntity(newWallPrefab, position, rotation);
+                    if (newEntity != null)
+                    {
+                        newEntity.Spawn();
+                        newEntity.OwnerID = player.userID;
+                    }
+                });
             }
         }
 
