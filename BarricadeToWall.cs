@@ -10,7 +10,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Barricade To Wall", "VisEntities", "1.0.0")]
+    [Info("Barricade To Wall", "VisEntities", "1.0.1")]
     [Description("Turns barricades into high external walls automatically.")]
     public class BarricadeToWall : RustPlugin
     {
@@ -128,8 +128,8 @@ namespace Oxide.Plugins
                     BaseEntity newEntity = GameManager.server.CreateEntity(newWallPrefab, position, rotation);
                     if (newEntity != null)
                     {
-                        newEntity.Spawn();
                         newEntity.OwnerID = player.userID;
+                        newEntity.Spawn();
                     }
                 });
             }
