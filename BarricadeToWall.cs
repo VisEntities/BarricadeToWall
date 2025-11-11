@@ -12,7 +12,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Barricade To Wall", "VisEntities", "1.1.0")]
+    [Info("Barricade To Wall", "VisEntities", "1.1.1")]
     [Description("Turns barricades into high external walls automatically.")]
     public class BarricadeToWall : RustPlugin
     {
@@ -109,6 +109,22 @@ namespace Oxide.Plugins
             public Dictionary<ulong, bool> BarricadeEnabled { get; set; } = new Dictionary<ulong, bool>();
         }
 
+        private void LoadData()
+        {
+            _storedData = DataFileUtil.LoadOrCreate<StoredData>(DataFileUtil.GetFilePath());
+
+            if (_storedData == null)
+                _storedData = new StoredData();
+
+            if (_storedData.BarricadeEnabled == null)
+                _storedData.BarricadeEnabled = new Dictionary<ulong, bool>();
+        }
+
+        private void SaveData()
+        {
+            DataFileUtil.Save(DataFileUtil.GetFilePath(), _storedData);
+        }
+
         #endregion Stored Data
 
         #region Oxide Hooks
@@ -117,7 +133,7 @@ namespace Oxide.Plugins
         {
             _plugin = this;
             PermissionUtil.RegisterPermissions();
-            _storedData = DataFileUtil.LoadOrCreate<StoredData>(DataFileUtil.GetFilePath());
+            LoadData();
             cmd.AddChatCommand(_config.ChatCommand, this, nameof(cmdBarricadeToggle));
         }
 
@@ -161,6 +177,10 @@ namespace Oxide.Plugins
                     {
                         newEntity.OwnerID = player.userID;
                         newEntity.Spawn();
+
+                        CallPlannerBuiltHook(planner, newEntity);
+                        TryFireOnItemDeployed(player, newEntity);
+                        TryCallOnDeployed(player, newEntity);
                     }
                 });
             }
@@ -173,28 +193,71 @@ namespace Oxide.Plugins
         private static class PermissionUtil
         {
             public const string USE = "barricadetowall.use";
-            private static readonly List<string> _permissions = new List<string>
+            private static readonly List<string> _all = new List<string>
             {
                 USE,
             };
 
             public static void RegisterPermissions()
             {
-                foreach (var permission in _permissions)
+                for (int i = 0; i < _all.Count; i++)
                 {
-                    _plugin.permission.RegisterPermission(permission, _plugin);
+                    string permissionName = _all[i];
+                    if (!string.IsNullOrEmpty(permissionName))
+                    {
+                        _plugin.permission.RegisterPermission(permissionName, _plugin);
+                    }
                 }
             }
 
             public static bool HasPermission(BasePlayer player, string permissionName)
             {
+                if (player == null)
+                    return false;
+
+                if (string.IsNullOrEmpty(permissionName))
+                    return false;
+
                 return _plugin.permission.UserHasPermission(player.UserIDString, permissionName);
             }
         }
 
         #endregion Permissions
 
-        #region Helper Functions
+        #region Build Hook Bridge
+
+        private static void CallPlannerBuiltHook(Planner planner, BaseEntity builtEntity)
+        {
+            if (planner == null || builtEntity == null)
+                return;
+
+            Interface.CallHook("OnEntityBuilt", planner, builtEntity.gameObject);
+        }
+
+        private static void TryFireOnItemDeployed(BasePlayer player, BaseEntity builtEntity)
+        {
+            if (player == null || builtEntity == null)
+                return;
+
+            var deployer = player.GetHeldEntity() as Deployer;
+            if (deployer == null)
+                return;
+
+            Interface.CallHook("OnItemDeployed", deployer, builtEntity);
+        }
+
+        private static void TryCallOnDeployed(BasePlayer player, BaseEntity builtEntity)
+        {
+            if (player == null || builtEntity == null)
+                return;
+
+            var activeItem = player.GetActiveItem();
+            builtEntity.OnDeployed(builtEntity.GetParentEntity(), player, activeItem);
+        }
+
+        #endregion Build Hook Bridge
+
+        #region Helpers
 
         private bool HasBarricadeEnabled(BasePlayer player)
         {
@@ -208,7 +271,7 @@ namespace Oxide.Plugins
             return currentState;
         }
 
-        #endregion Helper Functions
+        #endregion Helpers
 
         #region Helper Classes
 
@@ -287,7 +350,7 @@ namespace Oxide.Plugins
 
             if (!PermissionUtil.HasPermission(player, PermissionUtil.USE))
             {
-                MessagePlayer(player, Lang.NoPermission);
+                ReplyToPlayer(player, Lang.Error_NoPermission);
                 return;
             }
 
@@ -296,12 +359,12 @@ namespace Oxide.Plugins
             bool newState = !current;
 
             _storedData.BarricadeEnabled[userId] = newState;
-            DataFileUtil.Save(DataFileUtil.GetFilePath(), _storedData);
+            SaveData();
 
             if (newState)
-                MessagePlayer(player, Lang.BarricadeEnabled);
+                ReplyToPlayer(player, Lang.Toggle_Enabled);
             else
-                MessagePlayer(player, Lang.BarricadeDisabled);
+                ReplyToPlayer(player, Lang.Toggle_Disabled);
         }
 
         #endregion Commands
@@ -310,31 +373,38 @@ namespace Oxide.Plugins
 
         private class Lang
         {
-            public const string NoPermission = "NoPermission";
-            public const string BarricadeEnabled = "BarricadeEnabled";
-            public const string BarricadeDisabled = "BarricadeDisabled";
+            public const string Error_NoPermission = "Error.NoPermission";
+            public const string Toggle_Enabled = "Toggle.Enabled";
+            public const string Toggle_Disabled = "Toggle.Disabled";
         }
 
         protected override void LoadDefaultMessages()
         {
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                [Lang.NoPermission] = "You do not have permission to use this command.",
-                [Lang.BarricadeEnabled] = "You have turned Barricade-to-Wall ON! Any barricades you place will turn into walls.",
-                [Lang.BarricadeDisabled] = "You have turned Barricade-to-Wall OFF! Barricades you place will remain normal."
+                [Lang.Error_NoPermission] = "You do not have permission to use this command.",
+                [Lang.Toggle_Enabled] = "You have turned Barricade-to-Wall ON! Any barricades you place will turn into walls.",
+                [Lang.Toggle_Disabled] = "You have turned Barricade-to-Wall OFF! Barricades you place will remain normal."
             }, this, "en");
         }
 
         private static string GetMessage(BasePlayer player, string messageKey, params object[] args)
         {
-            string message = _plugin.lang.GetMessage(messageKey, _plugin, player.UserIDString);
+            string userId;
+            if (player != null)
+                userId = player.UserIDString;
+            else
+                userId = null;
+
+            string message = _plugin.lang.GetMessage(messageKey, _plugin, userId);
+
             if (args.Length > 0)
                 message = string.Format(message, args);
 
             return message;
         }
 
-        public static void MessagePlayer(BasePlayer player, string messageKey, params object[] args)
+        public static void ReplyToPlayer(BasePlayer player, string messageKey, params object[] args)
         {
             string message = GetMessage(player, messageKey, args);
             _plugin.SendReply(player, message);
